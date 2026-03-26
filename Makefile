@@ -1,4 +1,4 @@
-.PHONY: dev-server publish client wasm setup
+.PHONY: dev-server publish client wasm setup generate
 
 # Start the local SpacetimeDB server
 dev-server:
@@ -6,7 +6,7 @@ dev-server:
 
 # Publish the server module to local SpacetimeDB
 publish:
-	spacetime publish --server local what-may-become server/
+	cd server && spacetime publish --server local what-may-become
 
 # Run the native Bevy client
 client:
@@ -15,6 +15,10 @@ client:
 # Build and run the WASM client
 wasm:
 	cargo build -p what-may-become-client --target wasm32-unknown-unknown --release
+
+# Generate SpacetimeDB client bindings
+generate:
+	cd server && spacetime generate --lang rust --out-dir ../client/src/module_bindings
 
 # Install dependencies: SpacetimeDB CLI and WASM target
 setup:

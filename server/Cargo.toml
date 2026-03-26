@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 spacetimedb = "1.0"
+log = "0.4"
