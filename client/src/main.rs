@@ -151,7 +151,12 @@ struct OpeningEventUI;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(DefaultPlugins
+        .set(AssetPlugin {
+            file_path: "client/assets".to_string(),
+            ..default()
+        })
+        .set(WindowPlugin {
             primary_window: Some(Window {
                 title: "What May Become".into(),
                 resolution: (1280., 720.).into(),
