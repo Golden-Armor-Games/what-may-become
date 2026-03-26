@@ -1,0 +1,12 @@
+[package]
+name = "what-may-become-server"
+version.workspace = true
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+spacetimedb = "1.0"
