@@ -160,6 +160,39 @@ The community shapes the world.
 - Must have consequences
 - Must be implementable
 
+## The Three Realms
+
+Inspired by the distinct identity of DAoC's three-realm design — each realm should feel like a completely different world.
+
+### The North (Working Title: Greyhelm)
+- **Feel:** Cold, bleak, survival-focused. Viking/Norse mythology grounding.
+- **Palette:** Slate grays, ice blues, muted browns, frozen earth tones
+- **Environment:** Tundra, sparse pine forests, frozen coastlines, stone keeps
+- **People:** Stoic, clan-focused, deeply superstitious of the old gods
+- **Strength:** Warriors and berserkers, brutal melee dominance
+- **Weakness:** Limited magic, harsh resource scarcity
+
+### The Middle Realm (Working Title: Valenmoor)
+- **Feel:** Arthurian/medieval grounded. Neither utopia nor ruin. The contested center.
+- **Palette:** Warm earth tones, golden fields, stone grays, autumn colors
+- **Environment:** Rolling plains, farmland, marshes, walled cities, the classic RPG heartland
+- **People:** Divided — knights and commoners, nobility and serfs, faith and politics
+- **Strength:** Balanced — cavalry, faith magic, siege warfare
+- **Weakness:** Internal political fracture, slow to unite
+
+### The South/Forest Realm (Working Title: Thornveil)
+- **Feel:** Celtic/Irish mythology grounding. Ancient, mysterious, deeply forested.
+- **Palette:** Deep greens, mossy browns, bioluminescent accents at night, dappled light
+- **Environment:** Ancient old-growth forest, hidden groves, vine-covered ruins, fog-shrouded paths
+- **People:** Druids, rangers, fae-touched races. They don't conquer — they endure.
+- **Strength:** Nature magic, guerrilla warfare, animal companions
+- **Weakness:** No fixed fortifications, hard to hold territory
+
+### Realm-vs-Realm (RvR)
+The contested frontier between realms — keeps, border towns, chokepoints. This is where reputations are made or ended. The limited number of keeps exist here, and holding them across realm lines is the highest form of achievement.
+
+---
+
 ## Technical Vision
 
 ### Browser-First
