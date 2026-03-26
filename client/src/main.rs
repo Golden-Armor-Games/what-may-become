@@ -1,9 +1,17 @@
 mod module_bindings;
 
 use bevy::prelude::*;
-use bevy_spacetimedb::{ReadDeleteEvent, ReadInsertEvent, StdbConnected, StdbPlugin};
-use module_bindings::{create_hero, hero::Hero as DbHero, move_hero, DbConnection};
+use bevy_spacetimedb::{
+    DeleteEvent, InsertEvent, StdbConnectedEvent, StdbConnection,
+    StdbConnectionErrorEvent, StdbDisconnectedEvent, StdbPlugin,
+};
+use module_bindings::{
+    create_hero_reducer::create_hero, hero_table::HeroTableAccess,
+    move_hero_reducer::move_hero, DbConnection, Hero as DbHero,
+};
+use spacetimedb_sdk::Table;
 use spacetimedb_sdk::Identity;
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 // =============================================================================
@@ -89,6 +97,46 @@ struct PositionText;
 struct HeroNameText;
 
 // =============================================================================
+// SpacetimeDB Connection Setup
+// =============================================================================
+
+fn build_connection(
+    send_connected: Sender<StdbConnectedEvent>,
+    send_disconnected: Sender<StdbDisconnectedEvent>,
+    send_error: Sender<StdbConnectionErrorEvent>,
+    _app: &mut App,
+) -> DbConnection {
+    DbConnection::builder()
+        .with_uri("ws://localhost:3000")
+        .with_module_name("what-may-become")
+        .on_connect(move |_ctx, _identity, _token| {
+            send_connected.send(StdbConnectedEvent).unwrap();
+        })
+        .on_disconnect(move |_ctx, err| {
+            send_disconnected
+                .send(StdbDisconnectedEvent { err })
+                .unwrap();
+        })
+        .on_connect_error(move |_ctx, err| {
+            send_error
+                .send(StdbConnectionErrorEvent { err: err.clone() })
+                .unwrap();
+        })
+        .build()
+        .expect("Failed to connect to SpacetimeDB")
+}
+
+fn register_events(
+    plugin: &StdbPlugin<DbConnection>,
+    app: &mut App,
+    db: &<DbConnection as spacetimedb_sdk::DbContext>::DbView,
+    _reducers: &<DbConnection as spacetimedb_sdk::DbContext>::Reducers,
+) {
+    plugin.on_insert(app, db.hero());
+    plugin.on_delete(app, db.hero());
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 
@@ -103,7 +151,11 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins(StdbPlugin::<DbConnection>::new("ws://localhost:3000", "what-may-become"))
+        .add_plugins(
+            StdbPlugin::<DbConnection>::default()
+                .with_connection(build_connection)
+                .with_events(register_events),
+        )
         .init_state::<AppState>()
         .init_resource::<LocalHero>()
         .init_resource::<PositionSyncTimer>()
@@ -193,15 +245,15 @@ fn handle_connect(
     mut next_state: ResMut<NextState<AppState>>,
     mut local_hero: ResMut<LocalHero>,
     mut connection_status: ResMut<ConnectionStatus>,
-    mut connected_events: EventReader<StdbConnected<DbConnection>>,
-    mut hero_inserts: EventReader<ReadInsertEvent<DbHero>>,
-    conn: Res<DbConnection>,
+    mut connected_events: EventReader<StdbConnectedEvent>,
+    mut hero_inserts: EventReader<InsertEvent<DbHero>>,
+    conn: Res<StdbConnection<DbConnection>>,
 ) {
     // Handle connection event
-    for event in connected_events.read() {
+    for _event in connected_events.read() {
         connection_status.connected = true;
-        connection_status.identity = Some(event.identity);
-        info!("Connected to SpacetimeDB with identity: {:?}", event.identity);
+        connection_status.identity = conn.try_identity();
+        info!("Connected to SpacetimeDB with identity: {:?}", connection_status.identity);
     }
 
     if !connection_status.connected {
@@ -239,7 +291,7 @@ fn handle_connect(
     // If connected but no hero yet, check existing heroes in DB
     if local_hero.id.is_none() {
         let existing_hero = conn
-            .db
+            .db()
             .hero()
             .iter()
             .find(|h| Some(h.player_identity) == my_identity && h.is_alive);
@@ -264,7 +316,7 @@ fn handle_connect(
             next_state.set(AppState::Playing);
         } else {
             // Create a new hero
-            create_hero(&conn, "Hero".to_string());
+            let _ = conn.reducers().create_hero("Hero".to_string());
             info!("Creating new hero...");
         }
     }
@@ -306,7 +358,7 @@ fn sync_position(
     time: Res<Time>,
     mut sync_timer: ResMut<PositionSyncTimer>,
     local_hero: Res<LocalHero>,
-    conn: Res<DbConnection>,
+    conn: Res<StdbConnection<DbConnection>>,
     query: Query<&Transform, With<IsLocalPlayer>>,
 ) {
     sync_timer.timer.tick(time.delta());
@@ -327,7 +379,7 @@ fn sync_position(
     let distance = current_pos.distance(sync_timer.last_synced_pos);
 
     if distance > POSITION_THRESHOLD {
-        move_hero(&conn, hero_id, current_pos.x, current_pos.y);
+        let _ = conn.reducers().move_hero(hero_id, current_pos.x, current_pos.y);
         sync_timer.last_synced_pos = current_pos;
     }
 }
@@ -335,7 +387,7 @@ fn sync_position(
 fn spawn_remote_heroes(
     mut commands: Commands,
     local_hero: Res<LocalHero>,
-    mut hero_inserts: EventReader<ReadInsertEvent<DbHero>>,
+    mut hero_inserts: EventReader<InsertEvent<DbHero>>,
     existing_heroes: Query<&Hero>,
 ) {
     for event in hero_inserts.read() {
@@ -374,7 +426,7 @@ fn spawn_remote_heroes(
 
 fn despawn_remote_heroes(
     mut commands: Commands,
-    mut hero_deletes: EventReader<ReadDeleteEvent<DbHero>>,
+    mut hero_deletes: EventReader<DeleteEvent<DbHero>>,
     heroes: Query<(Entity, &Hero), With<RemotePlayer>>,
 ) {
     for event in hero_deletes.read() {
