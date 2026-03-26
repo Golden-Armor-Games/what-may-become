@@ -12,16 +12,14 @@ use module_bindings::{
 };
 use std::collections::HashSet;
 
-const HERO_SIZE: f32 = 32.0;
-const MOVE_SPEED: f32 = 200.0;
+const MOVE_SPEED: f32 = 8.0;
 const SYNC_INTERVAL_SECS: f32 = 0.1;
 const CAMERA_LERP_SPEED: f32 = 5.0;
 
-const TILE_SIZE: f32 = 64.0;
-const TILE_RENDER_RADIUS: i32 = 12;
+const TILE_SIZE: f32 = 2.0;
+const TILE_RENDER_RADIUS: i32 = 20;
 
 const COLOR_LOCAL_HERO: Color = Color::srgb(1.0, 0.6, 0.2);
-const COLOR_REMOTE_HERO: Color = Color::srgb(0.0, 0.8, 0.9);
 const COLOR_AMBER: Color = Color::srgb(1.0, 0.75, 0.2);
 
 // ─── App State ───────────────────────────────────────────────────────────────
@@ -36,6 +34,7 @@ enum AppState {
 
 // ─── Grid ────────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum TileType {
     Grass,
     Dirt,
@@ -49,11 +48,18 @@ fn tile_type(tx: i32, ty: i32) -> TileType {
     }
 }
 
+fn tile_hash(tx: i32, ty: i32, seed: u32) -> u32 {
+    ((tx.wrapping_mul(73856093) ^ ty.wrapping_mul(19349663)) as u32).wrapping_add(seed)
+}
+
 #[derive(Component)]
 struct GridTile {
     tx: i32,
     ty: i32,
 }
+
+#[derive(Component)]
+struct TileProp;
 
 #[derive(Resource, Default)]
 struct SpawnedTiles(HashSet<(i32, i32)>);
@@ -116,6 +122,9 @@ struct HeroEntity {
 
 #[derive(Component)]
 struct IsLocalPlayer;
+
+#[derive(Component)]
+struct MainCamera;
 
 #[derive(Component)]
 struct StatusText;
@@ -181,6 +190,7 @@ fn main() {
                         .on_delete(app, db.hero());
                 }),
         )
+        .insert_resource(ClearColor(Color::srgb(0.4, 0.6, 0.8)))
         .init_state::<AppState>()
         .init_resource::<PlayerName>()
         .init_resource::<LocalHero>()
@@ -229,7 +239,33 @@ fn main() {
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    // 3D Camera - isometric style
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 12.0, 12.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Projection::Perspective(PerspectiveProjection {
+            fov: 45.0_f32.to_radians(),
+            ..default()
+        }),
+        MainCamera,
+    ));
+
+    // Ambient light
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 400.0,
+    });
+
+    // Directional light (sun)
+    commands.spawn((
+        DirectionalLight {
+            color: Color::WHITE,
+            illuminance: 10000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
 
     // HUD (hidden until connected)
     commands
@@ -459,8 +495,6 @@ fn request_hero(
 fn on_connected(
     mut events: EventReader<StdbConnectedEvent>,
     conn: Option<Res<StdbConnection<DbConnection>>>,
-    player_name: Res<PlayerName>,
-    mut local_hero: ResMut<LocalHero>,
     mut status_q: Query<&mut Text, With<StatusText>>,
 ) {
     let Some(conn) = conn else { return };
@@ -476,8 +510,6 @@ fn on_connected(
         if let Ok(mut text) = status_q.get_single_mut() {
             **text = "Status: Connected".into();
         }
-
-        // Don't create hero yet — wait until we have a name (handled in on_enter_connecting)
     }
 }
 
@@ -488,6 +520,7 @@ fn on_hero_inserted(
     mut commands: Commands,
     mut name_q: Query<&mut Text, With<HeroNameText>>,
     mut next_state: ResMut<NextState<AppState>>,
+    asset_server: Res<AssetServer>,
 ) {
     let Some(conn) = conn else { return };
     let my_identity = conn.try_identity();
@@ -497,15 +530,22 @@ fn on_hero_inserted(
         info!("Hero insert: id={} name={} owner={:?}", hero.id, hero.name, hero.player_identity);
 
         let is_local = Some(hero.player_identity) == my_identity;
-        let color = if is_local { COLOR_LOCAL_HERO } else { COLOR_REMOTE_HERO };
+
+        // Map SpacetimeDB (x, y) to world (x, 0, z)
+        let world_x = hero.x;
+        let world_z = hero.y;
+
+        // Choose model based on local/remote
+        let model_path = if is_local {
+            "models/blade.glb#Scene0"
+        } else {
+            "models/banner-red.glb#Scene0"
+        };
 
         let mut entity = commands.spawn((
-            Sprite {
-                color,
-                custom_size: Some(Vec2::splat(HERO_SIZE)),
-                ..default()
-            },
-            Transform::from_xyz(hero.x, hero.y, 1.0),
+            SceneRoot(asset_server.load(model_path)),
+            Transform::from_xyz(world_x, 0.0, world_z)
+                .with_scale(Vec3::splat(0.8)),
             HeroEntity { id: hero.id },
         ));
 
@@ -712,16 +752,17 @@ fn handle_input(
 
     let Ok(mut transform) = query.get_single_mut() else { return };
 
-    let mut dir = Vec2::ZERO;
-    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp)    { dir.y += 1.0; }
-    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown)  { dir.y -= 1.0; }
+    // Movement in XZ plane
+    let mut dir = Vec3::ZERO;
+    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp)    { dir.z -= 1.0; }
+    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown)  { dir.z += 1.0; }
     if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft)  { dir.x -= 1.0; }
     if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) { dir.x += 1.0; }
 
-    if dir != Vec2::ZERO {
+    if dir != Vec3::ZERO {
         let delta = dir.normalize() * MOVE_SPEED * time.delta_secs();
         transform.translation.x += delta.x;
-        transform.translation.y += delta.y;
+        transform.translation.z += delta.z;
     }
 }
 
@@ -737,27 +778,37 @@ fn sync_position(
     let Ok(transform) = query.get_single() else { return };
     let Some(id) = local_hero.id else { return };
 
+    // Map world (x, z) to SpacetimeDB (x, y)
     let x = transform.translation.x;
-    let y = transform.translation.y;
+    let y = transform.translation.z;
     let _ = conn.reducers().move_hero(id, x, y);
 }
 
 fn smooth_camera_follow(
     time: Res<Time>,
-    hero_q: Query<&Transform, (With<IsLocalPlayer>, Without<Camera2d>)>,
-    mut camera_q: Query<&mut Transform, With<Camera2d>>,
+    hero_q: Query<&Transform, (With<IsLocalPlayer>, Without<MainCamera>)>,
+    mut camera_q: Query<&mut Transform, With<MainCamera>>,
 ) {
     let Ok(hero_transform) = hero_q.get_single() else { return };
     let Ok(mut camera_transform) = camera_q.get_single_mut() else { return };
 
+    // Follow hero in XZ, keep Y fixed at 12.0
     let target = Vec3::new(
         hero_transform.translation.x,
-        hero_transform.translation.y,
-        camera_transform.translation.z,
+        12.0,
+        hero_transform.translation.z + 12.0, // Offset Z to keep isometric view
     );
 
     let lerp_factor = CAMERA_LERP_SPEED * time.delta_secs();
     camera_transform.translation = camera_transform.translation.lerp(target, lerp_factor.min(1.0));
+
+    // Keep looking at hero position
+    let look_target = Vec3::new(
+        hero_transform.translation.x,
+        0.0,
+        hero_transform.translation.z,
+    );
+    camera_transform.look_at(look_target, Vec3::Y);
 }
 
 fn update_hud(
@@ -774,10 +825,10 @@ fn update_hud(
         **text = format!("Hero: {}", local_hero.name);
     }
 
-    // Update position
+    // Update position (show x, z as x, y for user)
     if let Ok(transform) = hero_q.get_single() {
         if let Ok(mut text) = pos_q.get_single_mut() {
-            **text = format!("Pos: ({:.0}, {:.0})", transform.translation.x, transform.translation.y);
+            **text = format!("Pos: ({:.0}, {:.0})", transform.translation.x, transform.translation.z);
         }
     }
 
@@ -791,20 +842,27 @@ fn update_hud(
 
 fn update_grid(
     mut commands: Commands,
-    camera_q: Query<&Transform, With<Camera2d>>,
+    camera_q: Query<&Transform, With<MainCamera>>,
     mut spawned: ResMut<SpawnedTiles>,
     tiles_q: Query<(Entity, &GridTile)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let Ok(cam_tf) = camera_q.get_single() else { return };
 
-    let cam_tx = (cam_tf.translation.x / TILE_SIZE).round() as i32;
-    let cam_ty = (cam_tf.translation.y / TILE_SIZE).round() as i32;
+    // Get camera look-at point (approximate center of view)
+    let cam_center_x = cam_tf.translation.x;
+    let cam_center_z = cam_tf.translation.z - 12.0; // Account for camera offset
+
+    let cam_tx = (cam_center_x / TILE_SIZE).round() as i32;
+    let cam_tz = (cam_center_z / TILE_SIZE).round() as i32;
 
     // Collect tiles that should be visible
     let mut needed: HashSet<(i32, i32)> = HashSet::new();
     for dx in -TILE_RENDER_RADIUS..=TILE_RENDER_RADIUS {
-        for dy in -TILE_RENDER_RADIUS..=TILE_RENDER_RADIUS {
-            needed.insert((cam_tx + dx, cam_ty + dy));
+        for dz in -TILE_RENDER_RADIUS..=TILE_RENDER_RADIUS {
+            needed.insert((cam_tx + dx, cam_tz + dz));
         }
     }
 
@@ -812,35 +870,90 @@ fn update_grid(
     for (entity, tile) in tiles_q.iter() {
         let pos = (tile.tx, tile.ty);
         if !needed.contains(&pos) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).despawn_recursive();
             spawned.0.remove(&pos);
         }
     }
 
+    // Create tile mesh (flat box)
+    let tile_mesh = meshes.add(Cuboid::new(1.9, 0.1, 1.9));
+
+    // Materials for grass and dirt
+    let grass_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.12, 0.25, 0.10),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    let dirt_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.28, 0.18, 0.08),
+        perceptual_roughness: 0.95,
+        ..default()
+    });
+
     // Spawn new tiles in range
-    for &(tx, ty) in &needed {
-        if spawned.0.contains(&(tx, ty)) {
+    for &(tx, tz) in &needed {
+        if spawned.0.contains(&(tx, tz)) {
             continue;
         }
 
-        let color = match tile_type(tx, ty) {
-            TileType::Grass => Color::srgb(0.08, 0.16, 0.08),
-            TileType::Dirt => Color::srgb(0.18, 0.11, 0.05),
+        let tt = tile_type(tx, tz);
+        let material = match tt {
+            TileType::Grass => grass_material.clone(),
+            TileType::Dirt => dirt_material.clone(),
         };
 
         let world_x = tx as f32 * TILE_SIZE;
-        let world_y = ty as f32 * TILE_SIZE;
+        let world_z = tz as f32 * TILE_SIZE;
 
+        // Spawn tile mesh
         commands.spawn((
-            Sprite {
-                color,
-                custom_size: Some(Vec2::splat(TILE_SIZE - 1.0)),
-                ..default()
-            },
-            Transform::from_xyz(world_x, world_y, 0.0),
-            GridTile { tx, ty },
-        ));
+            Mesh3d(tile_mesh.clone()),
+            MeshMaterial3d(material),
+            Transform::from_xyz(world_x, -0.05, world_z),
+            GridTile { tx, ty: tz },
+        )).with_children(|parent| {
+            // Optionally spawn a prop
+            let prop_hash = tile_hash(tx, tz, 12345);
+            let prop_chance = prop_hash % 100;
 
-        spawned.0.insert((tx, ty));
+            // Determine rotation (0, 90, 180, or 270 degrees)
+            let rotation_index = tile_hash(tx, tz, 67890) % 4;
+            let rotation = Quat::from_rotation_y((rotation_index as f32) * std::f32::consts::FRAC_PI_2);
+
+            let prop_path: Option<&str> = match tt {
+                TileType::Dirt => {
+                    if prop_chance < 5 {
+                        Some("models/road.glb#Scene0")
+                    } else if prop_chance < 10 {
+                        Some("models/road-corner.glb#Scene0")
+                    } else {
+                        None
+                    }
+                }
+                TileType::Grass => {
+                    if prop_chance < 3 {
+                        Some("models/tree.glb#Scene0")
+                    } else if prop_chance < 5 {
+                        Some("models/rock-small.glb#Scene0")
+                    } else if prop_chance < 6 {
+                        Some("models/tree-high.glb#Scene0")
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            if let Some(path) = prop_path {
+                parent.spawn((
+                    SceneRoot(asset_server.load(path)),
+                    Transform::from_xyz(0.0, 0.05, 0.0)
+                        .with_rotation(rotation)
+                        .with_scale(Vec3::splat(0.5)),
+                    TileProp,
+                ));
+            }
+        });
+
+        spawned.0.insert((tx, tz));
     }
 }
