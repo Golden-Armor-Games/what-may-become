@@ -196,13 +196,17 @@ fn main() {
         )
         .add_systems(
             Update,
+            request_hero.run_if(in_state(AppState::Connecting)),
+        )
+        .add_systems(
+            Update,
             (
                 on_connected,
                 on_hero_inserted,
                 on_hero_deleted,
                 update_hud,
                 update_grid,
-            ).run_if(in_state(AppState::Connecting).or(in_state(AppState::Playing))),
+            ),
         )
         .add_systems(
             Update,
@@ -437,6 +441,21 @@ fn on_enter_connecting(mut status_q: Query<&mut Text, With<StatusText>>) {
     }
 }
 
+fn request_hero(
+    conn: Option<Res<StdbConnection<DbConnection>>>,
+    player_name: Res<PlayerName>,
+    mut local_hero: ResMut<LocalHero>,
+) {
+    let Some(conn) = conn else { return };
+    if local_hero.hero_requested { return; }
+    if !conn.is_active() { return; }
+
+    local_hero.hero_requested = true;
+    let name = if player_name.0.is_empty() { "Hero".to_string() } else { player_name.0.clone() };
+    info!("Requesting create_hero with name: {}", name);
+    let _ = conn.reducers().create_hero(name);
+}
+
 fn on_connected(
     mut events: EventReader<StdbConnectedEvent>,
     conn: Option<Res<StdbConnection<DbConnection>>>,
@@ -458,12 +477,7 @@ fn on_connected(
             **text = "Status: Connected".into();
         }
 
-        if !local_hero.hero_requested {
-            local_hero.hero_requested = true;
-            let name = if player_name.0.is_empty() { "Hero".to_string() } else { player_name.0.clone() };
-            info!("Requesting create_hero with name: {}", name);
-            let _ = conn.reducers().create_hero(name);
-        }
+        // Don't create hero yet — wait until we have a name (handled in on_enter_connecting)
     }
 }
 
